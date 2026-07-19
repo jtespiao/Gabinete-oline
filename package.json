@@ -1,0 +1,10 @@
+﻿{
+  "name": "gabinete-online",
+  "version": "1.0.0",
+  "description": "Servidor Node.js para o gabinete-online",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}
