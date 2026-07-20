@@ -6,5 +6,5 @@ const server = http.createServer((req, res) => {
   res.end('Servidor rodando com sucesso na nuvem!');
 });
 server.listen(PORT, () => {
-  console.log(Servidor rodando com sucesso na porta \!);
+  console.log(Servidor rodando com sucesso na porta \!");
 });
