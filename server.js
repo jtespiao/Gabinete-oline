@@ -11,7 +11,7 @@ const PASTA_UPLOADS = path.join(__dirname, 'uploads');
 
 // --- ACESSO ADMINISTRATIVO ---
 const ADMIN_USER = "admin";
-const ADMIN_PASS = "Rogerio123";
+const ADMIN_PASS = "admin";
 
 // Inicialização de pastas e arquivos
 if (!fs.existsSync(PASTA_DADOS)) fs.mkdirSync(PASTA_DADOS, { recursive: true });
