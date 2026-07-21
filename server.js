@@ -24,7 +24,7 @@ if (!fs.existsSync(ARQUIVO_DADOS)) {
 
 // Credenciais Administrativas
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASS = process.env.ADMIN_PASS || "Rogerio123";
+const ADMIN_PASS = process.env.ADMIN_PASS || "admin";
 
 // --- MIDDLEWARES DE SEGURANÇA ---
 app.use(helmet({ contentSecurityPolicy: false })); 
