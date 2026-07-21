@@ -4,7 +4,7 @@
   "description": "Sistema Profissional de Gestão Parlamentar",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.s"
   },
   "dependencies": {
     "express": "^4.18.2",
