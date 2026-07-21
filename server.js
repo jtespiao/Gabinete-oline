@@ -3,22 +3,23 @@ const fs = require('fs');
 const path = require('path');
 const querystring = require('querystring');
 
+// --- CONFIGURAÇÕES DO SERVIDOR ---
 const PORTA = process.env.PORT || 3000;
-const PASTA_PROJETO = path.join(__dirname, 'dados');
-const ARQUIVO_DADOS = path.join(PASTA_PROJETO, 'demandas_campanha.json');
+const PASTA_DADOS = path.join(__dirname, 'dados');
+const ARQUIVO_DADOS = path.join(PASTA_DADOS, 'banco_eleitores.json');
 const PASTA_UPLOADS = path.join(__dirname, 'uploads');
 
+// --- CREDENCIAIS DE ACESSO AO PAINEL ---
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Rogerio123";
 
-[PASTA_PROJETO, PASTA_UPLOADS].forEach(pasta => {
-    if (!fs.existsSync(pasta)) fs.mkdirSync(pasta, { recursive: true });
-});
-if (!fs.existsSync(ARQUIVO_DADOS)) {
-    fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify([], null, 2), 'utf8');
-}
+// Inicialização de pastas e arquivos
+if (!fs.existsSync(PASTA_DADOS)) fs.mkdirSync(PASTA_DADOS, { recursive: true });
+if (!fs.existsSync(PASTA_UPLOADS)) fs.mkdirSync(PASTA_UPLOADS, { recursive: true });
+if (!fs.existsSync(ARQUIVO_DADOS)) fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify([], null, 2));
 
-function processarMultipart(req, callback) {
+// Função para processar formulários com arquivos (Multipart)
+function processarRequisicao(req, callback) {
     let contentType = req.headers['content-type'];
     if (!contentType || !contentType.includes('boundary=')) {
         let body = '';
@@ -26,34 +27,36 @@ function processarMultipart(req, callback) {
         req.on('end', () => callback({ campos: querystring.parse(body), arquivo: null }));
         return;
     }
+
     let boundary = contentType.split('boundary=')[1];
-    let dadosBuffer = [];
-    req.on('data', chunk => dadosBuffer.push(chunk));
+    let chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => {
-        let bufferCompleto = Buffer.concat(dadosBuffer);
+        let buffer = Buffer.concat(chunks);
         let partes = [];
-        let index = bufferCompleto.indexOf('--' + boundary);
-        while (index !== -1) {
-            let proximoIndex = bufferCompleto.indexOf('--' + boundary, index + boundary.length + 2);
-            if (proximoIndex === -1) break;
-            let parte = bufferCompleto.slice(index + boundary.length + 4, proximoIndex - 2);
-            partes.push(parte);
-            index = proximoIndex;
+        let start = buffer.indexOf('--' + boundary) + boundary.length + 4;
+        
+        while (start < buffer.length) {
+            let end = buffer.indexOf('--' + boundary, start) - 2;
+            if (end < 0) break;
+            partes.push(buffer.slice(start, end));
+            start = end + boundary.length + 4;
         }
+
         let resultado = { campos: {}, arquivo: null };
         partes.forEach(parte => {
-            let headerEnd = parte.indexOf('\r\n\r\n');
-            if (headerEnd === -1) return;
-            let header = parte.slice(0, headerEnd).toString();
-            let corpo = parte.slice(headerEnd + 4);
-            let nameMatch = header.match(/name="([^"]+)"/);
-            let filenameMatch = header.match(/filename="([^"]+)"/);
-            if (filenameMatch && filenameMatch[1] && corpo.length > 0) {
-                let nomeArquivo = Date.now() + '_' + filenameMatch[1].replace(/\s+/g, '_');
-                fs.writeFileSync(path.join(PASTA_UPLOADS, nomeArquivo), corpo);
-                resultado.arquivo = nomeArquivo;
-            } else if (nameMatch) {
-                resultado.campos[nameMatch[1]] = corpo.toString('utf8').trim();
+            let divisor = parte.indexOf('\r\n\r\n');
+            let cabecalho = parte.slice(0, divisor).toString();
+            let corpo = parte.slice(divisor + 4);
+            let nomeMatch = cabecalho.match(/name="([^"]+)"/);
+            let arquivoMatch = cabecalho.match(/filename="([^"]+)"/);
+
+            if (arquivoMatch && arquivoMatch[1] && corpo.length > 0) {
+                let nomeFinal = Date.now() + "_" + arquivoMatch[1].replace(/\s+/g, '_');
+                fs.writeFileSync(path.join(PASTA_UPLOADS, nomeFinal), corpo);
+                resultado.arquivo = nomeFinal;
+            } else if (nomeMatch) {
+                resultado.campos[nomeMatch[1]] = corpo.toString('utf8').trim();
             }
         });
         callback(resultado);
@@ -61,7 +64,10 @@ function processarMultipart(req, callback) {
 }
 
 const servidor = http.createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/') {
+    const url = req.url;
+
+    // 1. ROTA: FORMULÁRIO DE CADASTRO
+    if (req.method === 'GET' && url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`
 <!DOCTYPE html>
@@ -69,131 +75,164 @@ const servidor = http.createServer((req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cadastro Eleitoral - Gabinete Digital</title>
+    <title>Gabinete Digital - Irmão Rogério</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
-        body { background: #f0f4f8; padding: 20px; color: #102a43; }
-        .container { background: white; max-width: 900px; margin: auto; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); border-top: 8px solid #0063c6; }
-        h2 { text-align: center; color: #0b2146; margin-bottom: 25px; text-transform: uppercase; }
-        .aba-container { display: flex; justify-content: center; gap: 20px; margin-bottom: 30px; }
-        .aba { padding: 10px 25px; background: #e2e8f0; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.3s; }
-        .aba.ativa { background: #0063c6; color: white; }
-        .secao-titulo { grid-column: span 2; background: #f8fafc; padding: 10px; margin: 20px 0 10px 0; color: #0063c6; font-weight: bold; border-left: 5px solid #0063c6; text-transform: uppercase; font-size: 14px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .form-group { display: flex; flex-direction: column; }
-        .full { grid-column: span 2; }
-        label { font-size: 11px; font-weight: bold; margin-bottom: 5px; color: #486581; }
-        input, select, textarea { padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
-        button { grid-column: span 2; padding: 18px; background: #22c55e; color: white; border: none; border-radius: 35px; font-weight: bold; cursor: pointer; font-size: 16px; margin-top: 20px; }
-        .hidden { display: none; }
+        * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background:#f0f2f5; color:#1c1e21; padding:20px; display:flex; flex-direction:column; align-items:center; }
+        .form-card { background:#fff; width:100%; max-width:850px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.1); border-top:10px solid #0056b3; padding:40px; }
+        h1 { text-align:center; color:#0056b3; margin-bottom:10px; font-size:28px; }
+        p.subtitle { text-align:center; color:#606770; margin-bottom:30px; }
+        .section-title { grid-column:span 2; background:#e7f3ff; color:#0056b3; padding:10px; font-weight:bold; margin-top:20px; border-radius:5px; font-size:14px; text-transform:uppercase; }
+        .grid { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+        @media (max-width:600px) { .grid { grid-template-columns:1fr; } .section-title { grid-column:span 1; } }
+        .field { display:flex; flex-direction:column; margin-bottom:10px; }
+        .full { grid-column:span 2; }
+        label { font-size:12px; font-weight:700; margin-bottom:5px; color:#4b4f56; }
+        input, select, textarea { padding:12px; border:1px solid #dddfe2; border-radius:8px; font-size:15px; background:#f5f6f7; }
+        input:focus { border-color:#0056b3; outline:none; background:#fff; }
+        button { width:100%; padding:18px; background:#28a745; color:#fff; border:none; border-radius:30px; font-size:18px; font-weight:bold; cursor:pointer; margin-top:25px; transition:0.2s; }
+        button:hover { background:#218838; transform:scale(1.02); }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>🏛️ Cadastro de Eleitor - Irmão Rogério</h2>
+    <div class="form-card">
+        <h1>🏛️ VEREADOR IRMÃO ROGÉRIO</h1>
+        <p class="subtitle">Banco de Dados para Atendimento e Mobilização</p>
         <form action="/enviar" method="POST" enctype="multipart/form-data">
             <div class="grid">
-                <div class="secao-titulo">Dados Pessoais</div>
-                <div class="form-group full"><label>Nome Completo *</label><input type="text" name="nome" required></div>
-                <div class="form-group"><label>Apelido / Como gosta de ser chamado</label><input type="text" name="apelido"></div>
-                <div class="form-group"><label>Data de Nascimento *</label><input type="date" name="nascimento" required></div>
-                <div class="form-group full"><label>Nome da Mãe</label><input type="text" name="nome_mae"></div>
-                
-                <div class="secao-titulo">Contato e Redes Sociais</div>
-                <div class="form-group"><label>WhatsApp/Celular *</label><input type="text" name="whatsapp" required placeholder="(00) 00000-0000"></div>
-                <div class="form-group"><label>E-mail</label><input type="email" name="email"></div>
-                <div class="form-group"><label>Instagram (@usuario)</label><input type="text" name="instagram"></div>
-                <div class="form-group"><label>Facebook (Link)</label><input type="text" name="facebook"></div>
+                <div class="section-title">Informações Pessoais</div>
+                <div class="field full"><label>Nome Completo *</label><input type="text" name="nome" required></div>
+                <div class="field"><label>Como prefere ser chamado (Apelido)</label><input type="text" name="apelido"></div>
+                <div class="field"><label>Data de Nascimento *</label><input type="date" name="nascimento" required></div>
+                <div class="field full"><label>Nome da Mãe (Fundamental para cadastro)</label><input type="text" name="nome_mae"></div>
 
-                <div class="secao-titulo">Informações Eleitorais (Campanha)</div>
-                <div class="form-group"><label>Título de Eleitor</label><input type="text" name="titulo"></div>
-                <div class="form-group"><label>Zona Eleitoral</label><input type="text" name="zona"></div>
-                <div class="form-group"><label>Seção Eleitoral</label><input type="text" name="secao"></div>
+                <div class="section-title">Contato & Engajamento Social</div>
+                <div class="field"><label>WhatsApp/Celular *</label><input type="text" name="whatsapp" id="tel" required placeholder="(00) 00000-0000"></div>
+                <div class="field"><label>E-mail</label><input type="email" name="email"></div>
+                <div class="field"><label>Instagram (@seu_perfil)</label><input type="text" name="instagram" placeholder="@"></div>
+                <div class="field"><label>Facebook (Link)</label><input type="text" name="facebook"></div>
 
-                <div class="secao-titulo">Endereço Residencial</div>
-                <div class="form-group"><label>CEP</label><input type="text" id="cep" name="cep"></div>
-                <div class="form-group"><label>Bairro *</label><input type="text" id="bairro" name="bairro" required></div>
-                <div class="form-group full"><label>Rua / Logradouro</label><input type="text" id="rua" name="rua"></div>
-                <div class="form-group"><label>Número</label><input type="text" name="numero"></div>
-                <div class="form-group"><label>Cidade</label><input type="text" id="cidade" name="cidade" value="Primavera do Leste"></div>
+                <div class="section-title">Dados Eleitorais (Exclusivo Campanha)</div>
+                <div class="field"><label>Título de Eleitor</label><input type="text" name="titulo" maxlength="12"></div>
+                <div class="field"><label>Zona</label><input type="text" name="zona"></div>
+                <div class="field"><label>Seção</label><input type="text" name="secao"></div>
+                <div class="field"><label>Militante / Apoiador?</label>
+                    <select name="apoio">
+                        <option value="Sim">Sim, sou apoiador</option>
+                        <option value="Nao">Apenas morador</option>
+                        <option value="Talvez">Gostaria de conhecer mais</option>
+                    </select>
+                </div>
 
-                <div class="secao-titulo">Demanda / Relato</div>
-                <div class="form-group full"><label>O que você precisa ou sugere para a cidade? *</label><textarea name="mensagem" rows="4" required></textarea></div>
-                <div class="form-group full"><label>Anexar Foto (Opcional)</label><input type="file" name="anexo"></div>
-                
-                <button type="submit">GRAVAR NO BANCO DE DADOS</button>
+                <div class="section-title">Endereço de Atendimento</div>
+                <div class="field"><label>CEP (Busca Automática)</label><input type="text" name="cep" id="cep" placeholder="00000-000"></div>
+                <div class="field"><label>Bairro *</label><input type="text" name="bairro" id="bairro" required></div>
+                <div class="field full"><label>Rua e Número</label><input type="text" name="endereco" id="rua"></div>
+
+                <div class="section-title">Sua Demanda ou Sugestão</div>
+                <div class="field full"><label>Descreva sua solicitação *</label><textarea name="mensagem" rows="4" required></textarea></div>
+                <div class="field full"><label>Anexar Foto do Local/Problema (Opcional)</label><input type="file" name="anexo"></div>
+
+                <button type="submit">GRAVAR NO SISTEMA</button>
             </div>
         </form>
     </div>
+
     <script>
-        document.getElementById('cep').addEventListener('blur', function() {
-            let cep = this.value.replace(/\\D/g, '');
-            if (cep.length === 8) {
-                fetch(\`https://viacep.com.br/ws/\${cep}/json/\`).then(r => r.json()).then(d => {
-                    if(!d.erro) {
-                        document.getElementById('bairro').value = d.bairro;
-                        document.getElementById('rua').value = d.logradouro;
-                        document.getElementById('cidade').value = d.localidade;
-                    }
-                });
-            }
-        });
+        // Máscara de Telefone
+        document.getElementById('tel').oninput = function(e) {
+            let x = e.target.value.replace(/\\D/g, '').match(/(\\d{0,2})(\\d{0,5})(\\d{0,4})/);
+            e.target.value = !x[2] ? x[1] : '(' + x[1] + ') ' + x[2] + (x[3] ? '-' + x[3] : '');
+        };
+        // Busca CEP
+        document.getElementById('cep').onblur = function() {
+            let v = this.value.replace(/\\D/g, '');
+            if(v.length==8) fetch(\`https://viacep.com.br/ws/\${v}/json/\`).then(r=>r.json()).then(d=>{
+                if(!d.erro){ document.getElementById('bairro').value=d.bairro; document.getElementById('rua').value=d.logradouro; }
+            });
+        };
     </script>
 </body>
 </html>
         `);
 
-    } else if (req.method === 'POST' && req.url === '/enviar') {
-        processarMultipart(req, (resultado) => {
-            const demandas = JSON.parse(fs.readFileSync(ARQUIVO_DADOS, 'utf8'));
-            const nova = {
-                protocolo: 'ELEI' + Date.now().toString().slice(-5),
-                data: new Date().toLocaleString('pt-BR'),
-                ...resultado.campos,
-                arquivo: resultado.arquivo
+    // 2. ROTA: RECEBER DADOS (POST)
+    } else if (req.method === 'POST' && url === '/enviar') {
+        processarRequisicao(req, (resul) => {
+            const lista = JSON.parse(fs.readFileSync(ARQUIVO_DADOS));
+            const novo = {
+                id: "ELEI-" + Date.now().toString().slice(-6),
+                data_hora: new Date().toLocaleString('pt-BR'),
+                ...resul.campos,
+                foto: resul.arquivo
             };
-            demandas.push(nova);
-            salvarDemandas(demandas);
+            lista.push(novo);
+            fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify(lista, null, 2));
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end("<h1>Cadastro concluído! Obrigado pelo apoio.</h1><a href='/'>Voltar</a>");
+            res.end("<div style='text-align:center; padding:50px; font-family:sans-serif;'><h1>✅ Cadastro Realizado!</h1><p>Obrigado por fortalecer nosso trabalho.</p><br><a href='/'>Fazer novo cadastro</a></div>");
         });
 
-    } else if (req.method === 'GET' && req.url === '/admin') {
+    // 3. ROTA: PAINEL ADMINISTRATIVO
+    } else if (req.method === 'GET' && url === '/admin') {
         const auth = req.headers['authorization'];
         if (!auth) {
-            res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Admin"' });
-            return res.end('Login Requerido.');
+            res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Acesso Protegido"' });
+            return res.end('Login Requerido');
         }
-        const [user, pass] = Buffer.from(auth.split(' ')[1], 'base64').toString().split(':');
-        if (user !== ADMIN_USER || pass !== ADMIN_PASS) return res.end('Erro.');
+        
+        const creds = Buffer.from(auth.split(' ')[1], 'base64').toString().split(':');
+        if (creds[0] !== ADMIN_USER || creds[1] !== ADMIN_PASS) {
+            res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Acesso Protegido"' });
+            return res.end('Credenciais Incorretas');
+        }
 
-        const demandas = JSON.parse(fs.readFileSync(ARQUIVO_DADOS, 'utf8'));
-        let linhas = demandas.map(d => `
+        const dados = JSON.parse(fs.readFileSync(ARQUIVO_DADOS));
+        let tabela = dados.map(d => `
             <tr>
-                <td><b>${d.nome}</b><br>(${d.apelido || 'Sem apelido'})</td>
-                <td>${d.whatsapp}<br>${d.instagram || ''}</td>
-                <td>Bairro: ${d.bairro}<br>Zona: ${d.zona} | Seção: ${d.secao}</td>
-                <td>${d.mensagem}</td>
-                <td><a href="/uploads/${d.arquivo}" target="_blank">${d.arquivo ? 'Ver Foto' : '-'}</a></td>
+                <td><b>${d.nome}</b><br><small>${d.apelido || ''}</small></td>
+                <td>${d.whatsapp}<br><small>${d.instagram || ''}</small></td>
+                <td>Bairro: ${d.bairro}<br><small>Z: ${d.zona} S: ${d.secao}</small></td>
+                <td style="max-width:200px; font-size:12px;">${d.mensagem}</td>
+                <td>${d.foto ? `<a href="/uploads/${d.foto}" target="_blank">🖼️ Ver Foto</a>` : 'Sem foto'}</td>
             </tr>
         `).join('');
 
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`
-            <style>table{width:100%; border-collapse:collapse; font-family:sans-serif;} th,td{border:1px solid #ddd; padding:10px; text-align:left;} th{background:#0b2146; color:white;}</style>
-            <h2>Banco de Dados de Campanha</h2>
-            <table>
-                <tr><th>Eleitor</th><th>Contato/Redes</th><th>Localização/Voto</th><th>Demanda</th><th>Foto</th></tr>
-                ${linhas}
-            </table>
+            <html>
+            <head>
+                <style>
+                    body{font-family:sans-serif; background:#f0f2f5; padding:20px;}
+                    table{width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.1);}
+                    th,td{padding:12px; border-bottom:1px solid #eee; text-align:left;}
+                    th{background:#0056b3; color:#fff; text-transform:uppercase; font-size:12px;}
+                    tr:hover{background:#f9f9f9;}
+                </style>
+            </head>
+            <body>
+                <h2>📊 Banco de Dados Estratégico - Gabinete</h2>
+                <p>Total de Eleitores: <b>${dados.length}</b></p><br>
+                <table>
+                    <tr><th>Eleitor</th><th>Contato/Rede</th><th>Localização/Voto</th><th>Demanda</th><th>Anexo</th></tr>
+                    ${tabela || '<tr><td colspan="5" style="text-align:center">Nenhum registro encontrado</td></tr>'}
+                </table>
+            </body>
+            </html>
         `);
 
-    } else if (req.url.startsWith('/uploads/')) {
-        const file = path.join(__dirname, req.url);
-        if (fs.existsSync(file)) fs.createReadStream(file).pipe(res);
-        else res.end('404');
+    // 4. ROTA: SERVIR FOTOS
+    } else if (url.startsWith('/uploads/')) {
+        const caminho = path.join(__dirname, url);
+        if (fs.existsSync(caminho)) {
+            res.writeHead(200);
+            fs.createReadStream(caminho).pipe(res);
+        } else {
+            res.writeHead(404); res.end();
+        }
+
+    } else {
+        res.writeHead(404); res.end('Pagina nao encontrada');
     }
 });
 
-function salvarDemandas(d) { fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify(d, null, 2)); }
-
-servidor.listen(PORTA, () => console.log("Rodando porta " + PORTA));
+servidor.listen(PORTA, () => console.log("Servidor Profissional Online na porta " + PORTA));
