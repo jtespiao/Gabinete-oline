@@ -464,4 +464,4 @@ app.get('/admin/status/:id/:status', checkAuth, (req, res) => {
 app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
 
 // --- START ---
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${}`));
