@@ -1,269 +1,194 @@
-const http = require('http');
-const fs = require('fs');
+// Bibliotecas Necessárias
+const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit'); // Corrigido aqui
+const session = require('express-session');
+const multer = require('multer');
 const path = require('path');
-const querystring = require('querystring');
+const fs = require('fs');
 
-// --- CONFIGURAÇÕES DE AMBIENTE ---
+const app = express();
 const PORTA = process.env.PORT || 3000;
+
+// Configuração de Pastas e Banco de Dados Local
 const PASTA_DADOS = path.join(__dirname, 'dados');
 const ARQUIVO_DADOS = path.join(PASTA_DADOS, 'banco_eleitores_pro.json');
 const PASTA_UPLOADS = path.join(__dirname, 'uploads');
 
-// --- ACESSO ADMINISTRATIVO ---
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin";
-
-// Inicialização de pastas e arquivos
-if (!fs.existsSync(PASTA_DADOS)) fs.mkdirSync(PASTA_DADOS, { recursive: true });
-if (!fs.existsSync(PASTA_UPLOADS)) fs.mkdirSync(PASTA_UPLOADS, { recursive: true });
-if (!fs.existsSync(ARQUIVO_DADOS)) fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify([], null, 2));
-
-// Função para processar formulários (Multipart/Upload)
-function processarRequisicao(req, callback) {
-    let contentType = req.headers['content-type'];
-    if (!contentType || !contentType.includes('boundary=')) {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', () => callback({ campos: querystring.parse(body), arquivo: null }));
-        return;
-    }
-    let boundary = contentType.split('boundary=')[1];
-    let chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => {
-        let buffer = Buffer.concat(chunks);
-        let partes = [];
-        let start = buffer.indexOf('--' + boundary) + boundary.length + 4;
-        while (start < buffer.length) {
-            let end = buffer.indexOf('--' + boundary, start) - 2;
-            if (end < 0) break;
-            partes.push(buffer.slice(start, end));
-            start = end + boundary.length + 4;
-        }
-        let resultado = { campos: {}, arquivo: null };
-        partes.forEach(parte => {
-            let divisor = parte.indexOf('\r\n\r\n');
-            let cabecalho = parte.slice(0, divisor).toString();
-            let corpo = parte.slice(divisor + 4);
-            let nomeMatch = cabecalho.match(/name="([^"]+)"/);
-            let arquivoMatch = cabecalho.match(/filename="([^"]+)"/);
-            if (arquivoMatch && arquivoMatch[1] && corpo.length > 0) {
-                let nomeFinal = Date.now() + "_" + arquivoMatch[1].replace(/\s+/g, '_');
-                fs.writeFileSync(path.join(PASTA_UPLOADS, nomeFinal), corpo);
-                resultado.arquivo = nomeFinal;
-            } else if (nomeMatch) {
-                resultado.campos[nameMatch[1]] = corpo.toString('utf8').trim();
-            }
-        });
-        callback(resultado);
-    });
+[PASTA_DADOS, PASTA_UPLOADS].forEach(pasta => {
+    if (!fs.existsSync(pasta)) fs.mkdirSync(pasta, { recursive: true });
+});
+if (!fs.existsSync(ARQUIVO_DADOS)) {
+    fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify([], null, 2), 'utf8');
 }
 
-const servidor = http.createServer((req, res) => {
-    const url = req.url;
+// Credenciais Administrativas
+const ADMIN_USER = process.env.ADMIN_USER || "admin";
+const ADMIN_PASS = process.env.ADMIN_PASS || "Rogerio123";
 
-    // 1. ROTA: FORMULÁRIO DE CADASTRO (HOME)
-    if (req.method === 'GET' && url === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
+// --- MIDDLEWARES DE SEGURANÇA ---
+app.use(helmet({ contentSecurityPolicy: false })); 
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Limita o número de cadastros por minuto para evitar robôs
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 50, 
+    message: 'Muitos acessos detectados. Tente novamente em 15 minutos.'
+});
+app.use('/enviar', limiter);
+
+// Configuração de Sessão para o Login
+app.use(session({
+    secret: 'chave_secreta_gabinete_2026',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false, httpOnly: true, maxAge: 3600000 } // 1 hora de login
+}));
+
+// Configuração de Upload de Fotos
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, PASTA_UPLOADS),
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, Date.now() + '_' + Math.random().toString(36).substring(7) + ext);
+    }
+});
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 5 * 1024 * 1024 } // Máximo 5MB por foto
+});
+
+// Funções de Apoio
+function lerDados() { return JSON.parse(fs.readFileSync(ARQUIVO_DADOS, 'utf8')); }
+function salvarDados(dados) { fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify(dados, null, 2)); }
+
+// ----------------------------------------------------
+// ROTA 1: FORMULÁRIO DO CIDADÃO (VISUAL PREMIUM)
+// ----------------------------------------------------
+app.get('/', (req, res) => {
+    res.send(`
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gabinete Digital - Vereador Irmão Rogério</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI', sans-serif; }
-        body { background:#f4f7f9; padding:20px; display:flex; flex-direction:column; align-items:center; }
-        .form-card { background:#fff; width:100%; max-width:850px; border-radius:15px; box-shadow:0 10px 30px rgba(0,0,0,0.1); border-top:10px solid #0056b3; padding:35px; }
-        h1 { text-align:center; color:#0b2146; font-size:26px; margin-bottom:5px; }
-        .section-header { background:#e7f3ff; color:#0056b3; padding:10px 15px; font-weight:bold; margin-top:25px; border-radius:8px; font-size:13px; text-transform:uppercase; border-left:5px solid #0056b3; }
-        .grid { display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:12px; }
-        .field { display:flex; flex-direction:column; }
-        .full { grid-column:span 2; }
-        label { font-size:12px; font-weight:bold; color:#4b4f56; margin-bottom:5px; }
-        input, select, textarea { padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-size:15px; background:#f9fafb; }
-        input:focus { border-color:#0056b3; outline:none; background:#fff; }
-        button { width:100%; padding:18px; background:#28a745; color:#fff; border:none; border-radius:40px; font-size:18px; font-weight:bold; cursor:pointer; margin-top:30px; transition:0.3s; }
-        button:hover { background:#218838; transform:translateY(-2px); }
-        @media (max-width:600px) { .grid { grid-template-columns:1fr; } }
+        body { background-color: #f1f5f9; font-family: 'Segoe UI', sans-serif; }
+        .hero { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 40px 0; border-radius: 0 0 30px 30px; margin-bottom: 40px; }
+        .card-form { background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px; border: 1px solid #e2e8f0; }
+        .section-tag { font-size: 11px; font-weight: 800; color: #0d6efd; text-transform: uppercase; border-bottom: 2px solid #eee; padding-bottom: 5px; margin: 25px 0 15px 0; }
+        .btn-enviar { background: #10b981; border: none; border-radius: 50px; padding: 15px; font-weight: bold; transition: 0.3s; }
+        .btn-enviar:hover { background: #059669; transform: translateY(-2px); }
     </style>
 </head>
 <body>
-    <div class="form-card">
-        <h1>🏛️ VEREADOR IRMÃO ROGÉRIO</h1>
-        <p style="text-align:center; color:#627d98; font-size:15px;">Sistema de Cadastro e Atendimento Parlamentar</p>
-        <form action="/enviar" method="POST" enctype="multipart/form-data">
-            <div class="grid">
-                <div class="section-header" style="grid-column:span 2;">Informações do Eleitor</div>
-                <div class="field full"><label>Nome Completo *</label><input type="text" name="nome" required></div>
-                <div class="field"><label>Apelido / Como gosta de ser chamado</label><input type="text" name="apelido"></div>
-                <div class="field"><label>Data de Nascimento *</label><input type="date" name="nascimento" required></div>
-                <div class="field full"><label>Nome da Mãe (Fundamental para o Banco de Dados)</label><input type="text" name="nome_mae"></div>
-
-                <div class="section-header" style="grid-column:span 2;">Contato & Redes Sociais</div>
-                <div class="field"><label>WhatsApp (Somente números) *</label><input type="text" name="whatsapp" id="tel" required placeholder="Ex: 66999998877"></div>
-                <div class="field"><label>Instagram (@usuario)</label><input type="text" name="instagram" placeholder="@"></div>
-                <div class="field full"><label>Facebook (Link do Perfil)</label><input type="text" name="facebook"></div>
-
-                <div class="section-header" style="grid-column:span 2;">Informações de Campanha / Voto</div>
-                <div class="field"><label>Título de Eleitor</label><input type="text" name="titulo"></div>
-                <div class="field"><label>Zona Eleitoral</label><input type="text" name="zona"></div>
-                <div class="field"><label>Seção Eleitoral</label><input type="text" name="secao"></div>
-                <div class="field"><label>Grau de Apoio</label>
-                    <select name="apoio">
-                        <option value="Apoiador 100%">Apoiador 100%</option>
-                        <option value="Simpatizante">Simpatizante</option>
-                        <option value="Em negociação">Em negociação</option>
-                    </select>
+    <div class="hero text-center">
+        <h2>🏛️ GABINETE DIGITAL</h2>
+        <p class="opacity-75">Vereador Irmão Rogério - Sempre ao seu lado</p>
+    </div>
+    <div class="container mb-5" style="max-width: 800px;">
+        <div class="card-form">
+            <form action="/enviar" method="POST" enctype="multipart/form-data">
+                <div class="section-tag">Identificação do Eleitor</div>
+                <div class="row g-3">
+                    <div class="col-12"><label class="form-label">Nome Completo *</label><input type="text" name="nome" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label">Apelido</label><input type="text" name="apelido" class="form-control"></div>
+                    <div class="col-md-6"><label class="form-label">Nascimento *</label><input type="date" name="nascimento" class="form-control" required></div>
+                    <div class="col-12"><label class="form-label">Nome da Mãe</label><input type="text" name="nome_mae" class="form-control"></div>
                 </div>
 
-                <div class="section-header" style="grid-column:span 2;">Localização e Endereço</div>
-                <div class="field"><label>CEP (Busca Automática)</label><input type="text" name="cep" id="cep"></div>
-                <div class="field"><label>Bairro *</label><input type="text" name="bairro" id="bairro" required></div>
-                <div class="field full"><label>Endereço / Logradouro (Rua, Nº, Apto)</label><input type="text" name="endereco" id="rua"></div>
+                <div class="section-tag">Contato e Localização</div>
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label">WhatsApp *</label><input type="text" name="whatsapp" class="form-control" required placeholder="(00) 00000-0000"></div>
+                    <div class="col-md-6"><label class="form-label">Bairro *</label><input type="text" name="bairro" class="form-control" required></div>
+                    <div class="col-12"><label class="form-label">Endereço Completo</label><input type="text" name="endereco" class="form-control"></div>
+                </div>
 
-                <div class="section-header" style="grid-column:span 2;">Demanda Parlamentar</div>
-                <div class="field full"><label>Relate seu pedido ou sugestão detalhadamente *</label><textarea name="mensagem" rows="4" required></textarea></div>
-                <div class="field full"><label>Enviar Foto/Documento (Opcional)</label><input type="file" name="anexo"></div>
+                <div class="section-tag">Dados Eleitorais</div>
+                <div class="row g-3">
+                    <div class="col-md-4"><label class="form-label">Título</label><input type="text" name="titulo" class="form-control"></div>
+                    <div class="col-md-4"><label class="form-label">Zona</label><input type="text" name="zona" class="form-control"></div>
+                    <div class="col-md-4"><label class="form-label">Seção</label><input type="text" name="secao" class="form-control"></div>
+                </div>
 
-                <button type="submit">GRAVAR DADOS E SOLICITAR CÓPIA WHATSAPP</button>
-            </div>
-        </form>
+                <div class="section-tag">Sua Demanda</div>
+                <div class="col-12"><textarea name="mensagem" class="form-control" rows="4" placeholder="Descreva sua solicitação..." required></textarea></div>
+                <div class="col-12 mt-3"><label class="form-label">Foto do Local (Opcional)</label><input type="file" name="anexo" class="form-control"></div>
+
+                <button type="submit" class="btn btn-enviar text-white w-100 mt-4">ENVIAR E GERAR COMPROVANTE</button>
+            </form>
+        </div>
     </div>
-    <script>
-        document.getElementById('tel').oninput = function(e) {
-            let x = e.target.value.replace(/\\D/g, '').match(/(\\d{0,2})(\\d{0,5})(\\d{0,4})/);
-            if(x) e.target.value = !x[2] ? x[1] : '(' + x[1] + ') ' + x[2] + (x[3] ? '-' + x[3] : '');
-        };
-        document.getElementById('cep').onblur = function() {
-            let v = this.value.replace(/\\D/g, '');
-            if(v.length==8) fetch(\`https://viacep.com.br/ws/\${v}/json/\`).then(r=>r.json()).then(d=>{
-                if(!d.erro){ document.getElementById('bairro').value=d.bairro; document.getElementById('rua').value=d.logradouro; }
-            });
-        };
-    </script>
 </body>
 </html>`);
-
-    // 2. ROTA: RECEBER E SALVAR DADOS (POST)
-    } else if (req.method === 'POST' && url === '/enviar') {
-        processarRequisicao(req, (resul) => {
-            const lista = JSON.parse(fs.readFileSync(ARQUIVO_DADOS));
-            const protocolo = "GAB" + Date.now().toString().slice(-6);
-            const novo = { id: protocolo, data: new Date().toLocaleString('pt-BR'), ...resul.campos, foto: resul.arquivo };
-            lista.push(novo);
-            fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify(lista, null, 2));
-
-            // Link do WhatsApp com todos os dados preenchidos para o eleitor
-            const msg = `🏛️ *COMPROVANTE DE CADASTRO*\nGabinete Vereador Irmão Rogério\n\n*Protocolo:* ${protocolo}\n*Nome:* ${novo.nome}\n*WhatsApp:* ${novo.whatsapp}\n*Bairro:* ${novo.bairro}\n*Demanda:* ${novo.mensagem}\n\n_Cadastro realizado com sucesso via Gabinete Digital!_`;
-            const waLink = `https://api.whatsapp.com/send?phone=55${novo.whatsapp.replace(/\D/g,'')}&text=${encodeURIComponent(msg)}`;
-
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(`
-                <div style="text-align:center; padding:60px; font-family:sans-serif; background:#f4f7f9; min-height:100vh;">
-                    <div style="background:white; padding:40px; border-radius:20px; display:inline-block; box-shadow:0 10px 20px rgba(0,0,0,0.05);">
-                        <h1 style="color:#28a745;">✅ SUCESSO!</h1>
-                        <p style="font-size:18px; color:#4b4f56;">Seus dados foram gravados no sistema.</p>
-                        <p style="font-size:20px;">Protocolo: <b>${protocolo}</b></p>
-                        <br><br>
-                        <a href="${waLink}" style="display:inline-block; padding:20px 40px; background:#25d366; color:white; text-decoration:none; border-radius:50px; font-weight:bold; font-size:18px;">
-                            📩 RECEBER MINHA CÓPIA NO WHATSAPP
-                        </a>
-                        <br><br>
-                        <a href="/" style="color:#0056b3; font-weight:bold;">Voltar para o início</a>
-                    </div>
-                </div>
-            `);
-        });
-
-    // 3. ROTA: PAINEL ADMINISTRATIVO (CORRIGIDO)
-    } else if (req.method === 'GET' && url === '/admin') {
-        const auth = req.headers['authorization'];
-        
-        // Se não houver autenticação ou se estiver errada, pede novamente
-        if (!auth) {
-            res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Acesso Restrito ao Gabinete"' });
-            return res.end('Autenticacao necessaria.');
-        }
-
-        const creds = Buffer.from(auth.split(' ')[1], 'base64').toString().split(':');
-        if (creds[0] !== ADMIN_USER || creds[1] !== ADMIN_PASS) {
-            // Se a senha estiver errada, enviamos o 401 de novo para forçar a caixinha de login
-            res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Senha Incorreta - Tente Novamente"' });
-            return res.end('Usuario ou senha incorretos.');
-        }
-
-        const dados = JSON.parse(fs.readFileSync(ARQUIVO_DADOS));
-        let tabela = dados.map(d => `
-            <tr>
-                <td style="font-family:monospace; color:#0056b3;"><b>${d.id}</b><br>${d.data}</td>
-                <td>
-                    <b>${d.nome}</b> (${d.apelido || 'N/A'})<br>
-                    <small>Mãe: ${d.nome_mae || 'N/I'}</small><br>
-                    <small>Nasc: ${d.nascimento}</small>
-                </td>
-                <td>
-                    📱 ${d.whatsapp}<br>
-                    📸 ${d.instagram || '-'}<br>
-                    👤 ${d.facebook || '-'}
-                </td>
-                <td>
-                    📍 ${d.bairro}<br>
-                    🏠 ${d.endereco || '-'}<br>
-                    🗳️ <b>Z: ${d.zona || '-'} S: ${d.secao || '-'}</b><br>
-                    ⭐ Apoio: ${d.apoio}
-                </td>
-                <td style="font-size:12px; color:#333;">${d.mensagem}</td>
-                <td style="text-align:center;">${d.foto ? `<a href="/uploads/${d.foto}" target="_blank" style="text-decoration:none;">🖼️ VER</a>` : '-'}</td>
-            </tr>
-        `).join('');
-
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
-            <html>
-            <head>
-                <title>Painel Admin - Campanha Pro</title>
-                <style>
-                    body{font-family:sans-serif; background:#f0f2f5; padding:20px;}
-                    .container{background:#fff; border-radius:12px; padding:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);}
-                    table{width:100%; border-collapse:collapse; margin-top:15px;}
-                    th,td{border:1px solid #e1e4e8; padding:12px; text-align:left;}
-                    th{background:#0056b3; color:white; font-size:12px; text-transform:uppercase;}
-                    tr:hover{background:#f8f9fa;}
-                    .header{display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #eee; padding-bottom:15px;}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h2>📊 BANCO DE DADOS - GABINETE DIGITAL</h2>
-                        <span>Total de Eleitores: <b>${dados.length}</b></span>
-                    </div>
-                    <table>
-                        <thead>
-                            <tr><th>Protocolo</th><th>Identificação</th><th>Contatos</th><th>Voto/Local</th><th>Relato</th><th>Anexo</th></tr>
-                        </thead>
-                        <tbody>${tabela || '<tr><td colspan="6" style="text-align:center">Nenhum registro até agora.</td></tr>'}</tbody>
-                    </table>
-                </div>
-            </body>
-            </html>
-        `);
-
-    // 4. SERVIR ARQUIVOS DE UPLOAD
-    } else if (url.startsWith('/uploads/')) {
-        const file = path.join(__dirname, url);
-        if (fs.existsSync(file)) {
-            res.writeHead(200);
-            fs.createReadStream(file).pipe(res);
-        } else {
-            res.writeHead(404); res.end();
-        }
-
-    } else {
-        res.writeHead(404); res.end('Nao encontrado');
-    }
 });
 
-servidor.listen(PORTA, () => console.log("Servidor Profissional rodando na porta " + PORTA));
+// ----------------------------------------------------
+// ROTA 2: PROCESSAR DADOS E GERAR WHATSAPP
+// ----------------------------------------------------
+app.post('/enviar', upload.single('anexo'), (req, res) => {
+    const dados = lerDados();
+    const protocolo = "GB-" + Date.now().toString().slice(-6);
+    const novo = { id: protocolo, data: new Date().toLocaleString(), ...req.body, foto: req.file ? req.file.filename : null, status: 'Pendente' };
+    dados.push(novo);
+    salvarDados(dados);
+
+    const linkWa = `https://api.whatsapp.com/send?phone=55${novo.whatsapp.replace(/\D/g,'')}&text=Olá! Segue meu protocolo de atendimento: ${protocolo}`;
+    res.send(`<div style="text-align:center; padding:50px; font-family:sans-serif;">
+        <h1 style="color:#10b981;">✅ REGISTRADO!</h1>
+        <p>Seu protocolo: <b>${protocolo}</b></p>
+        <a href="${linkWa}" target="_blank" style="padding:15px 30px; background:#25d366; color:white; border-radius:30px; text-decoration:none; font-weight:bold;">RECEBER NO WHATSAPP</a>
+        <br><br><a href="/">Voltar ao Início</a>
+    </div>`);
+});
+
+// ----------------------------------------------------
+// ROTA 3: PAINEL ADMINISTRATIVO COM DASHBOARD
+// ----------------------------------------------------
+app.get('/login', (req, res) => {
+    res.send(`<body style="display:flex; align-items:center; justify-content:center; height:100vh; background:#0f172a; font-family:sans-serif;">
+        <form action="/login" method="POST" style="background:white; padding:40px; border-radius:15px; width:300px;">
+            <h3>Admin Login</h3>
+            <input type="text" name="usuario" placeholder="Usuário" style="width:100%; padding:10px; margin:10px 0;">
+            <input type="password" name="senha" placeholder="Senha" style="width:100%; padding:10px; margin:10px 0;">
+            <button style="width:100%; padding:10px; background:#0d6efd; color:white; border:none; border-radius:5px;">ENTRAR</button>
+        </form>
+    </body>`);
+});
+
+app.post('/login', (req, res) => {
+    if (req.body.usuario === ADMIN_USER && req.body.senha === ADMIN_PASS) {
+        req.session.autenticado = true;
+        return res.redirect('/admin');
+    }
+    res.send("<script>alert('Login Errado!'); window.location.href='/login';</script>");
+});
+
+app.get('/admin', (req, res) => {
+    if (!req.session.autenticado) return res.redirect('/login');
+    const dados = lerDados();
+    let linhas = dados.map(d => `<tr><td>${d.id}</td><td>${d.nome}</td><td>${d.whatsapp}</td><td>${d.bairro}</td><td>${d.status}</td></tr>`).join('');
+    res.send(`
+    <html>
+    <head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+    <body class="p-4 bg-light">
+        <div class="d-flex justify-content-between"><h2>📊 Dashboard de Demandas</h2><a href="/logout" class="btn btn-danger">Sair</a></div>
+        <div class="row my-4">
+            <div class="col-4"><div class="card p-3 text-center"><b>Total</b><br>${dados.length}</div></div>
+        </div>
+        <table class="table table-striped table-hover bg-white shadow-sm">
+            <thead class="table-dark"><tr><th>Protocolo</th><th>Eleitor</th><th>WhatsApp</th><th>Bairro</th><th>Status</th></tr></thead>
+            <tbody>${linhas}</tbody>
+        </table>
+    </body>
+    </html>`);
+});
+
+app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('/login'); });
+
+app.listen(PORTA, () => console.log("Servidor Profissional Rodando na Porta " + PORTA));
